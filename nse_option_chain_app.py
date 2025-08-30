@@ -137,8 +137,8 @@ def calculate_analytics(df, spot_price=None):
     strikes = df['STRIKE'].values
     losses = []
     for k in strikes:
-        call_loss = ((k - strikes).clip(lower=0) * df['CALL_OI']).sum()
-        put_loss = ((strikes - k).clip(lower=0) * df['PUT_OI']).sum()
+        call_loss = (np.clip(k - strikes, 0, None) * df['CALL_OI']).sum()
+        put_loss = (np.clip(strikes - k, 0, None) * df['PUT_OI']).sum()
         losses.append(call_loss + put_loss)
     max_pain = strikes[np.argmin(losses)] if len(losses) > 0 else 0
 
