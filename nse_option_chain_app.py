@@ -633,7 +633,7 @@ def run_streamlit_app():
         watchlist_raw = st.text_area("Watchlist (comma separated)", value="NIFTY,BANKNIFTY")
         enable_export = st.checkbox("Enable Excel export (charts embedded)", value=True)
         backtest_period_days = st.number_input("Backtest period (days)", min_value=30, max_value=3650, value=180, step=30)
-        st.write("Note: Charts in Excel require `kaleido` to be installed (requirements).")
+        st.write("Disclaimer: This analysis is for informational purposes only. It is not financial advice. Use at your own risk—creators are not responsible for any losses or market volatility")
 
     # BUTTONS
     fetch_clicked = st.button("Fetch & Analyze")
