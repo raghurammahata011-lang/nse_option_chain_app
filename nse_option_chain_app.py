@@ -597,81 +597,181 @@ def generate_signals_time_series(df_analytics_history):
         trades.append({"entry_date": entry_date, "exit_date": date, "position": position, "entry": entry_price, "exit": last_price, "pnl": pnl})
     return trades
 ##BackTest
-from datetime import timedelta
 import pandas as pd
 import numpy as np
 import yfinance as yf
+from datetime import timedelta
+import matplotlib.pyplot as plt
 
-def backtest_underlying(symbol, analytics_series, start_date, end_date):
+def backtest_underlying(symbol, analytics_series, start_date, end_date,
+                        capital_per_trade=100000, stop_loss=None, target_profit=None,
+                        plot_equity=False):
     """
-    Run backtest using underlying OHLC via yfinance and analytics_series.
-    Returns trades, metrics, equity curve, and plots.
+    Backtest an underlying using OHLC from yfinance and analytics_series signals.
+    Optional stop-loss, target-profit, and position sizing per trade.
+
+    Parameters:
+    - symbol: str, e.g., 'NIFTY', 'BANKNIFTY', or any yfinance ticker
+    - analytics_series: DataFrame with 'direction' column ('Long', 'Short', 'Neutral')
+    - start_date, end_date: datetime objects
+    - capital_per_trade: float, amount allocated per trade
+    - stop_loss: float, max loss per trade (absolute in points)
+    - target_profit: float, max profit per trade (absolute in points)
+    - plot_equity: bool, whether to plot equity curve
+
+    Returns:
+    - dict with trades, metrics, equity curve, and df
     """
-    idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^NSEFINNIFTY", "MIDCPNIFTY": "^NSEMIDCP"}
+    # --- Mapping for NSE indices ---
+    idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", 
+               "FINNIFTY": "^NSEFINNIFTY", "MIDCPNIFTY": "^NSEMIDCP"}
     yf_symbol = idx_map.get(symbol, symbol)
-    
-    # Convert dates to string format for yfinance
+
+    # --- Fetch historical OHLC ---
     start_str = start_date.strftime("%Y-%m-%d")
-    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")  # Include end date
-    
-    # Fetch historical OHLC data
+    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
     hist = yf.download(yf_symbol, start=start_str, end=end_str, progress=False)
     if hist.empty:
         return {"error": f"No data for {symbol}."}
-    
-    # Keep only close price and fix index
+
+    # --- Prepare OHLC DataFrame ---
     hist = hist[['Close']].rename(columns={'Close': 'close'}).copy()
+    if isinstance(hist.index, pd.MultiIndex):
+        hist = hist.reset_index(level=list(range(hist.index.nlevels)))
     hist['Date'] = pd.to_datetime(hist.index.date)
     hist.reset_index(drop=True, inplace=True)
-    
-    # Prepare analytics_series
-    analytics_series = analytics_series.copy()
+
+    # --- Prepare analytics series ---
     if 'direction' not in analytics_series.columns:
         return {"error": "analytics_series must have 'direction' column."}
     analytics_series = analytics_series[['direction']].copy()
+    if isinstance(analytics_series.index, pd.MultiIndex):
+        analytics_series = analytics_series.reset_index(level=list(range(analytics_series.index.nlevels)))
     analytics_series['Date'] = pd.to_datetime(analytics_series.index.date)
     analytics_series.reset_index(drop=True, inplace=True)
-    
-    # Full business day range
+
+    # --- Full business day range ---
     full_dates = pd.date_range(start=start_date, end=end_date, freq='B')
     df_full = pd.DataFrame({'Date': full_dates})
-    
-    # Merge data safely
+
+    # --- Merge safely ---
     df = pd.merge(df_full, hist, on='Date', how='left')
     df = pd.merge(df, analytics_series, on='Date', how='left')
-    
-    # Forward fill missing values
+
+    # --- Forward-fill missing values ---
     df['close'] = df['close'].ffill()
     df['direction'] = df['direction'].ffill().fillna('Neutral')
-    
     df.set_index('Date', inplace=True)
-    
-    # Generate trades
-    trades = generate_signals_time_series(df)  # Make sure this function exists
-    
-    # Performance metrics
+
+    # --- Generate trades with position sizing ---
+    trades = []
+    position = None
+    entry_price = 0.0
+    units = 0  # Number of contracts/shares per trade
+
+    for date, row in df.iterrows():
+        signal = row['direction']
+        price = row['close']
+
+        if position is None:
+            if signal == 'Long':
+                position = 'Long'
+                entry_price = price
+                units = capital_per_trade / price
+            elif signal == 'Short':
+                position = 'Short'
+                entry_price = price
+                units = capital_per_trade / price
+
+        elif position == 'Long':
+            pnl = (price - entry_price) * units
+            exit_trade = False
+
+            # Stop-loss / target-profit
+            if stop_loss is not None and pnl <= -stop_loss:
+                exit_trade = True
+            if target_profit is not None and pnl >= target_profit:
+                exit_trade = True
+            if signal in ['Short', 'Neutral']:
+                exit_trade = True
+
+            if exit_trade:
+                trades.append({'entry_date': date, 'exit_date': date,
+                               'position': 'Long', 'entry_price': entry_price,
+                               'exit_price': price, 'pnl': pnl})
+                if signal == 'Short':
+                    position = 'Short'
+                    entry_price = price
+                    units = capital_per_trade / price
+                elif signal == 'Neutral':
+                    position = None
+                    units = 0
+                else:
+                    position = None
+                    units = 0
+
+        elif position == 'Short':
+            pnl = (entry_price - price) * units
+            exit_trade = False
+
+            # Stop-loss / target-profit
+            if stop_loss is not None and pnl <= -stop_loss:
+                exit_trade = True
+            if target_profit is not None and pnl >= target_profit:
+                exit_trade = True
+            if signal in ['Long', 'Neutral']:
+                exit_trade = True
+
+            if exit_trade:
+                trades.append({'entry_date': date, 'exit_date': date,
+                               'position': 'Short', 'entry_price': entry_price,
+                               'exit_price': price, 'pnl': pnl})
+                if signal == 'Long':
+                    position = 'Long'
+                    entry_price = price
+                    units = capital_per_trade / price
+                elif signal == 'Neutral':
+                    position = None
+                    units = 0
+                else:
+                    position = None
+                    units = 0
+
+    # --- Metrics ---
     pnl_list = [t['pnl'] for t in trades] if trades else []
-    total_pnl = sum(pnl_list) if pnl_list else 0
+    total_pnl = sum(pnl_list)
     win_count = sum(1 for p in pnl_list if p > 0)
     loss_count = sum(1 for p in pnl_list if p <= 0)
     win_rate = win_count / len(pnl_list) if pnl_list else 0
     avg_pnl = np.mean(pnl_list) if pnl_list else 0
-    
-    # Equity curve and drawdown
+
     equity = np.cumsum(pnl_list) if pnl_list else np.array([0.0])
     peak = np.maximum.accumulate(equity)
     drawdown = peak - equity
     max_dd = np.max(drawdown) if len(drawdown) > 0 else 0.0
-    
+
+    if plot_equity and len(equity) > 0:
+        plt.figure(figsize=(10, 4))
+        plt.plot(equity, label='Equity Curve')
+        plt.fill_between(range(len(equity)), equity - drawdown, equity,
+                         color='red', alpha=0.2, label='Drawdown')
+        plt.title(f'Equity Curve for {symbol}')
+        plt.xlabel('Trade Number')
+        plt.ylabel('PnL')
+        plt.legend()
+        plt.show()
+
     return {
         "trades": trades,
-        "total_pnl": round(total_pnl, 4),
+        "total_pnl": round(total_pnl, 2),
         "win_rate": round(win_rate, 4),
-        "avg_pnl": round(avg_pnl, 4),
-        "max_drawdown": round(max_dd, 4),
+        "avg_pnl": round(avg_pnl, 2),
+        "max_drawdown": round(max_dd, 2),
         "equity_curve": equity.tolist(),
         "df": df
     }
+
+
 
 
 # Add this function to create a professional equity curve plot
@@ -888,12 +988,31 @@ def run_streamlit_app():
         start_date = end_date - timedelta(days=int(backtest_period_days))
         st.write(f"Backtest underlying: {backtest_symbol} from {start_date} to {end_date}")
 
+        # Optional Backtest inputs
+        col_bt1, col_bt2, col_bt3 = st.columns(3)
+        capital_per_trade = col_bt1.number_input("Capital per trade", value=100000, step=10000)
+        stop_loss = col_bt2.number_input("Stop Loss (points)", value=0.0, step=10.0)
+        target_profit = col_bt3.number_input("Target Profit (points)", value=0.0, step=10.0)
+        plot_equity = st.checkbox("Plot Equity Curve", value=True)
+
+        # Prepare analytics series for backtest
         date_index = pd.date_range(start=start_date, end=end_date, freq='B')
         analytics_series = pd.DataFrame(index=date_index)
         analytics_series['direction'] = analytics['direction']
+        analytics_series.index.name = 'Date'
 
         try:
-            bt = backtest_underlying(backtest_symbol, analytics_series, start_date, end_date)
+            bt = backtest_underlying(
+                symbol=backtest_symbol,
+                analytics_series=analytics_series,
+                start_date=start_date,
+                end_date=end_date,
+                capital_per_trade=capital_per_trade,
+                stop_loss=stop_loss if stop_loss > 0 else None,
+                target_profit=target_profit if target_profit > 0 else None,
+                plot_equity=plot_equity
+            )
+
             if 'error' in bt:
                 st.error(bt['error'])
             else:
@@ -903,8 +1022,9 @@ def run_streamlit_app():
                 col3.metric("Avg PnL per trade", f"{bt['avg_pnl']:.2f}")
                 col4.metric("Max Drawdown", f"{bt['max_drawdown']:.2f}")
 
-                fig_eq = plot_equity_curve(bt['equity_curve'], bt['trades'], bt['df'], backtest_symbol, line_shape='spline')
-                st.plotly_chart(fig_eq, use_container_width=True)
+                if plot_equity and bt['equity_curve']:
+                    fig_eq = plot_equity_curve(bt['equity_curve'], bt['trades'], bt['df'], backtest_symbol, line_shape='spline')
+                    st.plotly_chart(fig_eq, use_container_width=True)
 
                 trades_df = pd.DataFrame(bt['trades'])
                 if not trades_df.empty:
@@ -932,6 +1052,7 @@ def run_streamlit_app():
             )
         except Exception as e:
             st.error(f"Export failed: {e}")
+
 
 
 if __name__ == "__main__":
