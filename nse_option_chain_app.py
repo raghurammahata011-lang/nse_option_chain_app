@@ -38,10 +38,11 @@ INDICES = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
 THREAD_WORKERS = 6
 
 # ---------------- PROFESSIONAL CSS ----------------
+# Update the PRO_CSS variable at the top of the file
 PRO_CSS = """
 <style>
 :root{--card-bg:#fff;--accent:#0b69ff;--muted:#6b7280}
-body {background: linear-gradient(180deg,#f6f8fb 0%, #ffffff 100%);}
+body {background: linear-gradient(180deg,#f6f8fb 0%, #ffffff 100%); font-family: 'Inter', sans-serif;}
 .header {display:flex;align-items:center;gap:16px;padding:12px;border-radius:10px;margin-bottom:8px;}
 .app-title{font-size:26px;font-weight:700;color:var(--accent)}
 .app-sub{color:var(--muted);font-size:13px}
@@ -52,6 +53,7 @@ body {background: linear-gradient(180deg,#f6f8fb 0%, #ffffff 100%);}
 .small{font-size:12px;color:var(--muted)}
 .code{background:#f3f4f6;padding:8px;border-radius:6px;font-family:monospace}
 .card{border-radius:10px;padding:12px;background:#fff;box-shadow:0 4px 12px rgba(0,0,0,0.06);margin-bottom:12px}
+.plotly-graph-div {border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.06);}
 </style>
 """
 
@@ -562,60 +564,145 @@ def generate_signals_time_series(df_analytics_history):
         trades.append({"entry_date": entry_date, "exit_date": date, "position": position, "entry": entry_price, "exit": last_price, "pnl": pnl})
     return trades
 
+# Replace the existing backtest_underlying function with this improved version
 def backtest_underlying(symbol, analytics_series, start_date, end_date):
     """
-    Run backtest using underlying OHLC via yfinance and analytics_series (per day).
-    analytics_series: DataFrame indexed by date containing 'direction' produced by option snapshots.
-    We'll align times by business date; this is a simple overlay backtest to evaluate signals vs underlying moves.
+    Run backtest using underlying OHLC via yfinance and analytics_series.
+    Returns trades, metrics, equity curve, and plots.
     """
-    # Fetch underlying history
-    # For indices like NIFTY/BANKNIFTY, yfinance tickers may vary (use '^NSEI' for NIFTY?); user may pass symbols that exist on yfinance.
-    yf_symbol = symbol if symbol not in ("NIFTY", "BANKNIFTY") else None
-    # Try common index mappings:
-    idx_map = {
-        "NIFTY": "^NSEI",
-        "BANKNIFTY": "^NSEBANK"
-    }
-    if symbol in idx_map:
-        yf_symbol = idx_map[symbol]
-    if yf_symbol is None:
-        return {"error": "No yfinance mapping for symbol."}
-    hist = yf.download(yf_symbol, start=start_date, end=end_date, progress=False)
+    idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^NSEFINNIFTY", "MIDCPNIFTY": "^NSEMIDCP"}
+    yf_symbol = idx_map.get(symbol, symbol)
+    
+    # Convert dates to string format for yfinance
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")  # Include end date
+    
+    hist = yf.download(yf_symbol, start=start_str, end=end_str, progress=False)
     if hist.empty:
-        return {"error": "yfinance returned no data for symbol."}
-    hist = hist[['Close']].rename(columns={'Close': 'close'})
+        return {"error": f"No data for {symbol}."}
+    
+    hist = hist[['Close']].rename(columns={'Close': 'close'}).copy()
+    hist['Date'] = hist.index.date
     hist.index = pd.to_datetime(hist.index.date)
-    # Combine analytics_series (assumed daily) with hist by date
-    df = hist.join(analytics_series[['direction']], how='left')
+    
+    # Prepare analytics series
+    analytics_series = analytics_series.copy()
+    analytics_series['Date'] = analytics_series.index.date
+    
+    # Full business day range
+    full_dates = pd.date_range(start=start_date, end=end_date, freq='B').date
+    df_full = pd.DataFrame({'Date': full_dates})
+    
+    # Merge data
+    df = pd.merge(df_full, hist, on='Date', how='left')
+    df = pd.merge(df, analytics_series, on='Date', how='left')
+    df['close'] = df['close'].ffill()
     df['direction'] = df['direction'].ffill().fillna('Neutral')
+    df.set_index('Date', inplace=True)
+    
     # Generate trades
     trades = generate_signals_time_series(df)
+    
     # Performance metrics
     pnl_list = [t['pnl'] for t in trades] if trades else []
-    total_pnl = sum(pnl_list)
+    total_pnl = sum(pnl_list) if pnl_list else 0
     win_count = sum(1 for p in pnl_list if p > 0)
     loss_count = sum(1 for p in pnl_list if p <= 0)
     win_rate = win_count / len(pnl_list) if pnl_list else 0
-    avg_pnl = (np.mean(pnl_list) if pnl_list else 0)
-    # Max drawdown of equity curve
+    avg_pnl = np.mean(pnl_list) if pnl_list else 0
+    
+    # Equity curve and drawdown
     equity = np.cumsum(pnl_list) if pnl_list else np.array([0.0])
     peak = np.maximum.accumulate(equity)
-    dd = (peak - equity)
-    max_dd = np.max(dd) if len(dd) > 0 else 0.0
+    drawdown = peak - equity
+    max_dd = np.max(drawdown) if len(drawdown) > 0 else 0.0
+    
     return {
         "trades": trades,
-        "total_pnl": total_pnl,
+        "total_pnl": round(total_pnl, 4),
         "win_rate": round(win_rate, 4),
         "avg_pnl": round(avg_pnl, 4),
         "max_drawdown": round(max_dd, 4),
-        "equity_curve": equity.tolist()
+        "equity_curve": equity.tolist(),
+        "df": df
     }
+
+# Add this function to create a professional equity curve plot
+def plot_equity_curve(equity_curve, trades, df, symbol):
+    """
+    Create a professional equity curve plot with buy/sell markers
+    """
+    if not equity_curve or len(equity_curve) == 0:
+        return go.Figure()
+    
+    # Create dates for equity curve (align with trades)
+    dates = df.index[:len(equity_curve)]
+    
+    fig = go.Figure()
+    
+    # Equity curve
+    fig.add_trace(go.Scatter(
+        x=dates, 
+        y=equity_curve, 
+        mode='lines', 
+        name='Equity',
+        line=dict(color='#0b69ff', width=2),
+        fill='tozeroy',
+        fillcolor='rgba(11, 105, 255, 0.1)'
+    ))
+    
+    # Add buy/sell markers if we have trades
+    if trades:
+        buy_dates = []
+        buy_equity = []
+        sell_dates = []
+        sell_equity = []
+        
+        for i, trade in enumerate(trades):
+            if i < len(equity_curve):
+                if trade['position'] == 'LONG':
+                    buy_dates.append(trade['entry_date'])
+                    buy_equity.append(equity_curve[i])
+                elif trade['position'] == 'SHORT':
+                    sell_dates.append(trade['entry_date'])
+                    sell_equity.append(equity_curve[i])
+        
+        if buy_dates:
+            fig.add_trace(go.Scatter(
+                x=buy_dates, 
+                y=buy_equity, 
+                mode='markers',
+                name='Buy',
+                marker=dict(color='green', symbol='triangle-up', size=10, line=dict(width=1, color='DarkGreen'))
+            ))
+        
+        if sell_dates:
+            fig.add_trace(go.Scatter(
+                x=sell_dates, 
+                y=sell_equity, 
+                mode='markers',
+                name='Sell',
+                marker=dict(color='red', symbol='triangle-down', size=10, line=dict(width=1, color='DarkRed'))
+            ))
+    
+    fig.update_layout(
+        title=f"{symbol} Backtest Equity Curve",
+        xaxis_title="Date",
+        yaxis_title="Equity",
+        template="plotly_white",
+        height=400,
+        margin=dict(t=50, b=50, l=50, r=50),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
+    return fig
 
 # ---------------- STREAMLIT APP ----------------
 def run_streamlit_app():
     st.set_page_config(page_title="NSE Option Chain Professional", layout="wide")
     st.markdown(PRO_CSS, unsafe_allow_html=True)
-    # HEADER
+
+    # ---- HEADER ----
     left, right = st.columns([8, 2])
     with left:
         st.markdown('<div class="header"><div class="app-title">NSE Option Chain — Professional</div></div>', unsafe_allow_html=True)
@@ -623,23 +710,22 @@ def run_streamlit_app():
     with right:
         st.image("https://upload.wikimedia.org/wikipedia/commons/2/24/Chart_up_trend_icon.svg", width=60)
 
-    # SIDEBAR configuration
+    # ---- SIDEBAR CONFIGURATION ----
     with st.sidebar:
         st.header("Configuration")
-        symbol = st.text_input("Primary symbol (for single-symbol analysis)", "NIFTY").upper()
-        spot_price = st.number_input("Spot price (optional, numeric)", value=0.0)
+        symbol = st.text_input("Primary symbol", "NIFTY").upper()
+        spot_price = st.number_input("Spot price (optional)", value=0.0)
         enable_ml = st.checkbox("Enable ML Regression", value=True)
         enable_class = st.checkbox("Enable ML Classification", value=True)
         watchlist_raw = st.text_area("Watchlist (comma separated)", value="NIFTY,BANKNIFTY")
         enable_export = st.checkbox("Enable Excel export (charts embedded)", value=True)
         backtest_period_days = st.number_input("Backtest period (days)", min_value=30, max_value=3650, value=180, step=30)
-        st.write("Disclaimer: This analysis is for informational purposes only. It is not financial advice. Use at your own risk—creators are not responsible for any losses or market volatility")
+        st.write("Disclaimer: For informational purposes only. Not financial advice.")
 
-    # BUTTONS
+    # ---- BUTTONS ----
     fetch_clicked = st.button("Fetch & Analyze")
     if not fetch_clicked:
         st.info("Enter symbol and click 'Fetch & Analyze' to start.")
-        # still show watchlist snapshot optionally
         if st.sidebar.button("Refresh Watchlist Snapshot"):
             watchlist_syms = [s.strip().upper() for s in watchlist_raw.split(",") if s.strip()]
             if watchlist_syms:
@@ -648,15 +734,15 @@ def run_streamlit_app():
                     st.dataframe(snap)
         return
 
-    # MAIN: fetch and analyze primary symbol
+    # ---- FETCH & ANALYZE ----
     session = get_nse_session()
     data_json = fetch_option_chain(symbol, session)
     if not data_json:
-        st.error("Failed to fetch option chain from NSE. Check symbol or try again later.")
+        st.error("Failed to fetch option chain from NSE.")
         return
     df = parse_data(symbol, data_json)
     if df.empty:
-        st.error("No option chain data available (perhaps wrong symbol or no current expiry).")
+        st.error("No option chain data available.")
         return
 
     # Estimate spot if not provided
@@ -667,7 +753,7 @@ def run_streamlit_app():
 
     analytics = calculate_analytics(df, spot_price)
 
-    # ML
+    # ---- ML ----
     ml_results, ml_top_calls, ml_top_puts = {}, [], []
     if enable_ml:
         with st.spinner("Training regression models..."):
@@ -678,52 +764,50 @@ def run_streamlit_app():
         with st.spinner("Training classification models..."):
             class_results, consensus_label = train_ml_models_classification(analytics['df'])
 
-    # KPI cards row
-    kpis = [
-        ("Direction", analytics['direction']),
-        ("PCR", analytics['pcr']),
-        ("Max Pain", analytics['max_pain']),
-        ("Exp. 30d Move", analytics['expected_move_30d'])
-    ]
+    # ---- KPI CARDS ----
+    kpis = [("Direction", analytics['direction']), ("PCR", analytics['pcr']),
+            ("Max Pain", analytics['max_pain']), ("Exp. 30d Move", analytics['expected_move_30d'])]
     cols = st.columns(len(kpis))
     for c, (lbl, val) in zip(cols, kpis):
         c.markdown(f"<div class='kpi'><div class='label'>{lbl}</div><div class='value'>{val}</div></div>", unsafe_allow_html=True)
 
-    # Insights / signals
+    # ---- INSIGHTS ----
     st.markdown("---")
     st.subheader("Professional Insights & Strategy Signals")
     insights = [
         f"Market direction: **{analytics['direction']}** (score {analytics['dir_score']})",
         f"PCR (overall): **{analytics['pcr']}** | PCR (ATM window): **{analytics['pcr_atm']}**",
-        f"Expected 30-day move (approx): **{analytics['expected_move_30d']}** (absolute price move)",
+        f"Expected 30-day move: **{analytics['expected_move_30d']}**",
         f"Max Pain: **{analytics['max_pain']}**; Support: **{analytics['support']}**, Resistance: **{analytics['resistance']}**"
     ]
     for itm in insights:
         st.info(itm)
 
-    # Strategy suggestions
+    # ---- STRATEGY SIGNALS ----
     signals = generate_strategy_signals(analytics)
     st.markdown("#### Suggested Strategies")
     for s in signals:
         st.markdown(f"**{s['strategy']}** — {s['rationale']}")
         st.markdown(f"<span class='small'>Risk note: {s['risk']}</span>", unsafe_allow_html=True)
 
-    # TABS: Option chain, Charts, ML, Watchlist, Backtest, Export
+    # ---- TABS ----
     tab1, tab2, tab3, tab4, tab5 = st.tabs(["Option Chain Table", "Charts", "ML Results", "Watchlist", "Backtest"])
+
+    # Tab1: Option Chain
     with tab1:
         st.dataframe(analytics['df'], use_container_width=True)
-        st.markdown("**Top Calls**")
-        st.dataframe(analytics['top_calls'])
-        st.markdown("**Top Puts**")
-        st.dataframe(analytics['top_puts'])
+        st.markdown("**Top Calls**"); st.dataframe(analytics['top_calls'])
+        st.markdown("**Top Puts**"); st.dataframe(analytics['top_puts'])
 
+    # Tab2: Charts
     with tab2:
-        st.plotly_chart(create_oi_chart(analytics['df']), use_container_width=True)
-        st.plotly_chart(create_sentiment_chart(analytics['df']), use_container_width=True)
-        st.plotly_chart(create_iv_comparison_chart(analytics['df']), use_container_width=True)
+        st.plotly_chart(create_oi_chart(analytics['df'], line_shape='spline'), use_container_width=True)
+        st.plotly_chart(create_sentiment_chart(analytics['df'], line_shape='spline'), use_container_width=True)
+        st.plotly_chart(create_iv_comparison_chart(analytics['df'], line_shape='spline'), use_container_width=True)
         if 'ML_PREDICTED_STRIKE' in analytics['df'].columns:
-            st.plotly_chart(create_ml_prediction_chart(analytics['df'], analytics, ml_top_calls, ml_top_puts), use_container_width=True)
+            st.plotly_chart(create_ml_prediction_chart(analytics['df'], analytics, ml_top_calls, ml_top_puts, line_shape='spline'), use_container_width=True)
 
+    # Tab3: ML
     with tab3:
         st.subheader("Regression Model Performance")
         if ml_results:
@@ -734,11 +818,11 @@ def run_streamlit_app():
             st.markdown("**ML recommended puts**: " + (", ".join(map(str, ml_top_puts)) if ml_top_puts else "N/A"))
         else:
             st.info("ML disabled or not enough data.")
-
         st.subheader("Classification Model")
         st.write("Models accuracy:", class_results)
         st.info(f"Consensus label from options features: **{consensus_label}**")
 
+    # Tab4: Watchlist
     with tab4:
         st.subheader("Watchlist Snapshot")
         watchlist_syms = [s.strip().upper() for s in watchlist_raw.split(",") if s.strip()]
@@ -749,52 +833,59 @@ def run_streamlit_app():
         else:
             st.info("Add symbols to the watchlist in the sidebar.")
 
+    # Tab5: Backtest
     with tab5:
         st.subheader("Backtest (Underlying via yfinance)")
-        # Build a simple daily analytics series: ideally you would capture analytics over time,
-        # but here we simulate by using the single analytics snapshot repeated, or optionally allow rolling snapshots.
-        # Better approach: user should schedule daily exports to create a real analytics time series.
         backtest_symbol = symbol
         end_date = datetime.today().date()
         start_date = end_date - timedelta(days=int(backtest_period_days))
         st.write(f"Backtest underlying: {backtest_symbol} from {start_date} to {end_date}")
-        # Build mock analytics_series: for demo we will use the option snapshot's direction as repeated daily signal
-        # In real deployment you should collect daily analytics snapshots to a time-series DB and feed that here.
-        date_index = pd.date_range(start=start_date, end=end_date, freq='B')  # business days
+
+        date_index = pd.date_range(start=start_date, end=end_date, freq='B')
         analytics_series = pd.DataFrame(index=date_index)
-        analytics_series['direction'] = analytics['direction']  # repeated
+        analytics_series['direction'] = analytics['direction']
+
         try:
-            bt = backtest_underlying(backtest_symbol, analytics_series, start_date.strftime("%Y-%m-%d"), (end_date + timedelta(days=1)).strftime("%Y-%m-%d"))
+            bt = backtest_underlying(backtest_symbol, analytics_series, start_date, end_date)
             if 'error' in bt:
                 st.error(bt['error'])
             else:
-                st.metric("Total PnL", bt['total_pnl'])
-                st.metric("Win Rate", f"{bt['win_rate']*100:.2f}%")
-                st.metric("Avg PnL per trade", bt['avg_pnl'])
-                st.metric("Max Drawdown", bt['max_drawdown'])
-                st.write("Trades:")
-                st.dataframe(pd.DataFrame(bt['trades']))
-                # equity curve plot
-                if bt['equity_curve']:
-                    fig_eq = go.Figure()
-                    fig_eq.add_trace(go.Scatter(y=bt['equity_curve'], mode='lines+markers', name='Equity'))
-                    fig_eq.update_layout(title="Backtest Equity Curve", height=300)
-                    st.plotly_chart(fig_eq, use_container_width=True)
+                col1, col2, col3, col4 = st.columns(4)
+                col1.metric("Total PnL", f"{bt['total_pnl']:.2f}")
+                col2.metric("Win Rate", f"{bt['win_rate']*100:.2f}%")
+                col3.metric("Avg PnL per trade", f"{bt['avg_pnl']:.2f}")
+                col4.metric("Max Drawdown", f"{bt['max_drawdown']:.2f}")
+
+                fig_eq = plot_equity_curve(bt['equity_curve'], bt['trades'], bt['df'], backtest_symbol, line_shape='spline')
+                st.plotly_chart(fig_eq, use_container_width=True)
+
+                trades_df = pd.DataFrame(bt['trades'])
+                if not trades_df.empty:
+                    trades_df['entry_date'] = pd.to_datetime(trades_df['entry_date']).dt.strftime('%Y-%m-%d')
+                    trades_df['exit_date'] = pd.to_datetime(trades_df['exit_date']).dt.strftime('%Y-%m-%d')
+                    st.dataframe(trades_df.style.format({'entry':'{:.2f}','exit':'{:.2f}','pnl':'{:.2f}'}))
+                else:
+                    st.info("No trades generated in this period.")
         except Exception as e:
             st.error(f"Backtest error: {e}")
 
-    # Export button
-    st.markdown("---")
+    # ---- EXCEL EXPORT ----
     if enable_export:
-        if st.button("Export Analysis to Excel (with Charts)"):
-            with st.spinner("Exporting to Excel..."):
-                try:
-                    path = save_to_excel(analytics['df'], analytics, symbol, ml_results, ml_top_calls, ml_top_puts)
-                    st.success(f"Exported to: {path}")
-                    with open(path, "rb") as f:
-                        st.download_button("Download Excel", data=f, file_name=os.path.basename(path))
-                except Exception as e:
-                    st.error(f"Export failed: {e}")
+        st.markdown("---")
+        st.subheader("Export Analysis to Excel")
+        try:
+            path = save_to_excel(analytics['df'], analytics, symbol, ml_results, ml_top_calls, ml_top_puts)
+            with open(path, "rb") as f:
+                bytes_data = f.read()
+            st.download_button(
+                label="Download Excel File",
+                data=bytes_data,
+                file_name=os.path.basename(path),
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except Exception as e:
+            st.error(f"Export failed: {e}")
+
 
 if __name__ == "__main__":
     run_streamlit_app()
