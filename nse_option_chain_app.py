@@ -604,130 +604,67 @@ from datetime import timedelta
 import matplotlib.pyplot as plt
 
 # Replace the backtest_underlying function with this corrected version
-def backtest_underlying(symbol, analytics_series, start_date, end_date,
-                        capital_per_trade=100000, stop_loss=None, target_profit=None,
-                        plot_equity=False):
+# Replace the backtest_underlying function with this corrected version
+def backtest_underlying(symbol, analytics_series, start_date, end_date):
     """
-    Backtest an underlying using OHLC from yfinance and analytics_series signals.
+    Run backtest using underlying OHLC via yfinance and analytics_series.
     Fixed to handle MultiIndex issues with yfinance data.
     """
-    # --- Mapping for NSE indices ---
-    idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", 
-               "FINNIFTY": "^NSEFINNIFTY", "MIDCPNIFTY": "^NSEMIDCP"}
+    idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", "FINNIFTY": "^NSEFINNIFTY", "MIDCPNIFTY": "^NSEMIDCP"}
     yf_symbol = idx_map.get(symbol, symbol)
-
-    # --- Fetch historical OHLC ---
-    start_str = start_date.strftime("%Y-%m-%d")
-    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
-    hist = yf.download(yf_symbol, start=start_str, end=end_str, progress=False)
     
+    # Convert dates to string format for yfinance
+    start_str = start_date.strftime("%Y-%m-%d")
+    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")  # Include end date
+    
+    hist = yf.download(yf_symbol, start=start_str, end=end_str, progress=False)
     if hist.empty:
         return {"error": f"No data for {symbol}."}
-
-    # --- Prepare OHLC DataFrame ---
+    
     # Reset index to handle MultiIndex if present
     hist = hist.reset_index()
     hist = hist[['Date', 'Close']].rename(columns={'Close': 'close'})
     hist['Date'] = pd.to_datetime(hist['Date']).dt.date
-
-    # --- Prepare analytics series ---
-    if 'direction' not in analytics_series.columns:
-        return {"error": "analytics_series must have 'direction' column."}
     
+    # Prepare analytics series
     analytics_series = analytics_series.copy()
     analytics_series['Date'] = pd.to_datetime(analytics_series.index).date
     analytics_series = analytics_series[['Date', 'direction']]
-
-    # --- Full business day range ---
+    
+    # Full business day range
     full_dates = pd.date_range(start=start_date, end=end_date, freq='B').date
     df_full = pd.DataFrame({'Date': full_dates})
-
-    # --- Merge safely ---
+    
+    # Merge data
     df = pd.merge(df_full, hist, on='Date', how='left')
     df = pd.merge(df, analytics_series, on='Date', how='left')
-
-    # --- Forward-fill missing values ---
     df['close'] = df['close'].ffill()
     df['direction'] = df['direction'].ffill().fillna('Neutral')
     df.set_index('Date', inplace=True)
-
-    # --- Generate trades with position sizing ---
-    trades = []
-    position = None
-    entry_price = 0.0
-    units = 0  # Number of contracts/shares per trade
-
-    for date, row in df.iterrows():
-        signal = row['direction']
-        price = row['close']
-
-        if position is None:
-            if signal == 'Bullish':
-                position = 'LONG'
-                entry_price = price
-                units = capital_per_trade / price
-            elif signal == 'Bearish':
-                position = 'SHORT'
-                entry_price = price
-                units = capital_per_trade / price
-
-        elif position == 'LONG':
-            pnl = (price - entry_price) * units
-            exit_trade = False
-
-            # Stop-loss / target-profit
-            if stop_loss is not None and pnl <= -stop_loss:
-                exit_trade = True
-            if target_profit is not None and pnl >= target_profit:
-                exit_trade = True
-            if signal in ['Bearish', 'Neutral']:
-                exit_trade = True
-
-            if exit_trade:
-                trades.append({'entry_date': date, 'exit_date': date,
-                               'position': 'LONG', 'entry': entry_price,
-                               'exit': price, 'pnl': pnl})
-                position = None
-                units = 0
-
-        elif position == 'SHORT':
-            pnl = (entry_price - price) * units
-            exit_trade = False
-
-            # Stop-loss / target-profit
-            if stop_loss is not None and pnl <= -stop_loss:
-                exit_trade = True
-            if target_profit is not None and pnl >= target_profit:
-                exit_trade = True
-            if signal in ['Bullish', 'Neutral']:
-                exit_trade = True
-
-            if exit_trade:
-                trades.append({'entry_date': date, 'exit_date': date,
-                               'position': 'SHORT', 'entry': entry_price,
-                               'exit': price, 'pnl': pnl})
-                position = None
-                units = 0
-
-    # --- Metrics ---
+    
+    # Generate trades
+    trades = generate_signals_time_series(df)
+    
+    # Performance metrics
     pnl_list = [t['pnl'] for t in trades] if trades else []
-    total_pnl = sum(pnl_list)
+    total_pnl = sum(pnl_list) if pnl_list else 0
     win_count = sum(1 for p in pnl_list if p > 0)
     loss_count = sum(1 for p in pnl_list if p <= 0)
     win_rate = win_count / len(pnl_list) if pnl_list else 0
     avg_pnl = np.mean(pnl_list) if pnl_list else 0
-
+    
+    # Equity curve and drawdown
     equity = np.cumsum(pnl_list) if pnl_list else np.array([0.0])
     peak = np.maximum.accumulate(equity)
     drawdown = peak - equity
     max_dd = np.max(drawdown) if len(drawdown) > 0 else 0.0
-
+    
     return {
         "trades": trades,
-        "total_pnl": round(total_pnl, 2),
+        "total_pnl": round(total_pnl, 4),
         "win_rate": round(win_rate, 4),
-        "avg_pnl": round(avg_pnl, 2),
-        "max_drawdown": round(max_dd, 2),
+        "avg_pnl": round(avg_pnl, 4),
+        "max_drawdown": round(max_dd, 4),
         "equity_curve": equity.tolist(),
         "df": df
     }
