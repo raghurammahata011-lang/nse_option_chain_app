@@ -1,0 +1,13 @@
+# Set default behavior to automatically normalize line endings
+* text=auto
+
+# Explicitly declare text files you want to normalize
+*.py text
+*.txt text
+*.md text
+
+# Binary files (do not change line endings)
+*.png binary
+*.jpg binary
+*.gif binary
+*.pdf binary
