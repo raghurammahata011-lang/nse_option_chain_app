@@ -603,8 +603,8 @@ import yfinance as yf
 from datetime import timedelta
 import matplotlib.pyplot as plt
 
-# Replace the backtest_underlying function with this corrected version
-# Replace the backtest_underlying function with this corrected version
+
+# The backtest_underlying function with this corrected version
 def backtest_underlying(symbol, analytics_series, start_date, end_date):
     """
     Run backtest using underlying OHLC via yfinance and analytics_series.
@@ -841,8 +841,10 @@ def run_streamlit_app():
     # Tab1: Option Chain
     with tab1:
         st.dataframe(analytics['df'], use_container_width=True)
-        st.markdown("**Top Calls**"); st.dataframe(analytics['top_calls'])
-        st.markdown("**Top Puts**"); st.dataframe(analytics['top_puts'])
+        st.markdown("**Top Calls**")
+        st.dataframe(analytics['top_calls'])
+        st.markdown("**Top Puts**")
+        st.dataframe(analytics['top_puts'])
 
     # Tab2: Charts
     with tab2:
@@ -886,13 +888,6 @@ def run_streamlit_app():
         start_date = end_date - timedelta(days=int(backtest_period_days))
         st.write(f"Backtest underlying: {backtest_symbol} from {start_date} to {end_date}")
 
-        # Optional Backtest inputs
-        col_bt1, col_bt2, col_bt3 = st.columns(3)
-        capital_per_trade = col_bt1.number_input("Capital per trade", value=100000, step=10000)
-        stop_loss = col_bt2.number_input("Stop Loss (points)", value=0.0, step=10.0)
-        target_profit = col_bt3.number_input("Target Profit (points)", value=0.0, step=10.0)
-        plot_equity = st.checkbox("Plot Equity Curve", value=True)
-
         # Prepare analytics series for backtest
         date_index = pd.date_range(start=start_date, end=end_date, freq='B')
         analytics_series = pd.DataFrame(index=date_index)
@@ -901,17 +896,12 @@ def run_streamlit_app():
         analytics_series.columns = ['Date', 'direction']
         analytics_series['Date'] = pd.to_datetime(analytics_series['Date']).dt.date
         
-
         try:
             bt = backtest_underlying(
                 symbol=backtest_symbol,
                 analytics_series=analytics_series,
                 start_date=start_date,
-                end_date=end_date,
-                capital_per_trade=capital_per_trade,
-                stop_loss=stop_loss if stop_loss > 0 else None,
-                target_profit=target_profit if target_profit > 0 else None,
-                plot_equity=plot_equity
+                end_date=end_date
             )
 
             if 'error' in bt:
@@ -923,7 +913,8 @@ def run_streamlit_app():
                 col3.metric("Avg PnL per trade", f"{bt['avg_pnl']:.2f}")
                 col4.metric("Max Drawdown", f"{bt['max_drawdown']:.2f}")
 
-                if plot_equity and bt['equity_curve']:
+                # Always plot equity curve if available
+                if bt['equity_curve']:
                     fig_eq = plot_equity_curve(bt['equity_curve'], bt['trades'], bt['df'], backtest_symbol, line_shape='spline')
                     st.plotly_chart(fig_eq, use_container_width=True)
 
@@ -953,7 +944,6 @@ def run_streamlit_app():
             )
         except Exception as e:
             st.error(f"Export failed: {e}")
-
 
 
 if __name__ == "__main__":
