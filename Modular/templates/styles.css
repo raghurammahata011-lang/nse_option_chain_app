@@ -1,0 +1,73 @@
+/* templates/styles.css */
+.stMetric {
+    background-color: #f8f9fa;
+    border-radius: 0.5rem;
+    padding: 1rem;
+    border-left: 4px solid #4ECDC4;
+}
+
+.stMetric label {
+    font-weight: 600;
+    color: #495057;
+}
+
+.stMetric div {
+    font-size: 1.5rem;
+    font-weight: 700;
+    color: #212529;
+}
+
+.css-1d391kg {
+    border: 1px solid #e9ecef;
+    border-radius: 0.5rem;
+}
+
+.stTabs [data-baseweb="tab-list"] {
+    gap: 8px;
+}
+
+.stTabs [data-baseweb="tab"] {
+    background-color: #f8f9fa;
+    border-radius: 4px 4px 0px 0px;
+    padding: 8px 16px;
+    border: 1px solid #e9ecef;
+}
+
+.stTabs [aria-selected="true"] {
+    background-color: #4ECDC4;
+    color: white;
+}
+
+.stButton button {
+    border-radius: 0.5rem;
+    border: 1px solid #4ECDC4;
+    color: #4ECDC4;
+    background-color: white;
+    transition: all 0.3s ease;
+}
+
+.stButton button:hover {
+    background-color: #4ECDC4;
+    color: white;
+    border-color: #4ECDC4;
+}
+
+.stSpinner {
+    color: #4ECDC4;
+}
+
+.stSuccess {
+    color: #28a745;
+}
+
+.stError {
+    color: #dc3545;
+}
+
+.stInfo {
+    color: #17a2b8;
+}
+
+.stWarning {
+    color: #ffc107;
+}

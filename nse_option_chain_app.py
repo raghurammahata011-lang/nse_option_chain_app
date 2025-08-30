@@ -27,6 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_absolute_error, r2_score, accuracy_score, confusion_matrix, classification_report
 from sklearn.cluster import KMeans
+from strategies import option_greeks, plot_strategy, strategy_summary
 import os
 import concurrent.futures
 import yfinance as yf
@@ -1074,8 +1075,14 @@ def main():
             </div>
             """, unsafe_allow_html=True)
     
-    # Main content
-    tab1, tab2, tab3, tab4 = st.tabs(["Option Chain", "Analytics & ML", "Strategy Signals", "Backtesting"])
+    # Main content with extra tab
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+        "Option Chain", 
+        "Analytics & ML", 
+        "Strategy Signals", 
+        "Backtesting",
+        "Strategies & Greeks"
+    ])
     
     with tab1:
         st.markdown("""
@@ -1092,7 +1099,7 @@ def main():
                 all_data = {}
                 with concurrent.futures.ThreadPoolExecutor(max_workers=THREAD_WORKERS) as executor:
                     future_to_symbol = {
-                        executor.submit(fetch_option_chain, symbol, st.session_state.session): symbol 
+                        executor.submit(fetch_option_chain, symbol, st.session_state.session): symbol
                         for symbol in st.session_state.symbols
                     }
                     
@@ -1169,7 +1176,7 @@ def main():
                         'PUT_CHNG_IN_OI': '{:,.0f}',
                         'PUT_IV': '{:.2f}',
                         'PUT_LTP': '{:.2f}'
-                    }), height=300, use_container_width=True)
+                    }), height=300, width='stretch')
                     
                     # Export button
                     excel_buffer = create_excel_export(
@@ -1245,17 +1252,17 @@ def main():
                                 """, unsafe_allow_html=True)
                             
                             # Charts
-                            st.plotly_chart(create_oi_chart(analytics['df']), use_container_width=True)
-                            st.plotly_chart(create_iv_comparison_chart(analytics['df']), use_container_width=True)
-                            st.plotly_chart(create_volatility_surface_chart(analytics['df']), use_container_width=True)
+                            st.plotly_chart(create_oi_chart(analytics['df']), width='stretch')
+                            st.plotly_chart(create_iv_comparison_chart(analytics['df']), width='stretch')
+                            st.plotly_chart(create_volatility_surface_chart(analytics['df']), width='stretch')
                             
                             # ML Analysis
                             st.markdown("### Machine Learning Insights")
                             
                             ml_results, top_calls, top_puts, feature_importance = train_ml_models_regression(analytics['df'])
                             if ml_results:
-                                st.plotly_chart(create_ml_prediction_chart(analytics['df'], analytics, top_calls, top_puts), use_container_width=True)
-                                st.plotly_chart(create_model_performance_chart(ml_results), use_container_width=True)
+                                st.plotly_chart(create_ml_prediction_chart(analytics['df'], analytics, top_calls, top_puts), width='stretch')
+                                st.plotly_chart(create_model_performance_chart(ml_results), width='stretch')
                                 
                                 st.markdown("#### Top ML Recommendations")
                                 col1, col2 = st.columns(2)
@@ -1270,7 +1277,7 @@ def main():
                                 
                                 st.markdown("#### Feature Importance")
                                 feature_df = pd.DataFrame(list(feature_importance.items()), columns=['Feature', 'Importance'])
-                                st.dataframe(feature_df.sort_values('Importance', ascending=False), use_container_width=True)
+                                st.dataframe(feature_df.sort_values('Importance', ascending=False), width='stretch')
                             else:
                                 st.info("Not enough data for ML analysis")
     
@@ -1448,6 +1455,57 @@ def main():
                     except Exception as e:
                         st.error(f"Error fetching historical data: {str(e)}")
     
+    with tab5:
+        st.subheader("📈 Strategy Payoff Simulator + Greeks")
+
+        # Inputs
+        spot = st.number_input("Spot Price", value=20000)
+        r = st.number_input("Risk-free Rate (%)", value=6.0) / 100
+        sigma = st.number_input("Implied Volatility (%)", value=20.0) / 100
+        T_days = st.number_input("Days to Expiry", value=30)
+        T = T_days/365
+
+        # Greeks
+        K = st.number_input("Strike Price (for Greeks)", value=20000)
+        option_type = st.radio("Option Type", ["call","put"])
+        greeks = option_greeks(spot, K, T, r, sigma, option_type)
+        st.write("**Option Greeks:**", greeks)
+
+        # Strategy Selector
+        strategy_choice = st.selectbox("Select Strategy", 
+                                       ["Long Straddle","Short Straddle","Bull Call Spread","Iron Condor"])
+
+        if strategy_choice == "Long Straddle":
+            strategy = [
+                {"type":"call","K":spot,"premium":200,"pos":"long"},
+                {"type":"put","K":spot,"premium":180,"pos":"long"}
+            ]
+        elif strategy_choice == "Short Straddle":
+            strategy = [
+                {"type":"call","K":spot,"premium":200,"pos":"short"},
+                {"type":"put","K":spot,"premium":180,"pos":"short"}
+            ]
+        elif strategy_choice == "Bull Call Spread":
+            strategy = [
+                {"type":"call","K":spot,"premium":200,"pos":"long"},
+                {"type":"call","K":spot+200,"premium":120,"pos":"short"}
+            ]
+        elif strategy_choice == "Iron Condor":
+            strategy = [
+                {"type":"call","K":spot+200,"premium":120,"pos":"short"},
+                {"type":"call","K":spot+400,"premium":60,"pos":"long"},
+                {"type":"put","K":spot-200,"premium":100,"pos":"short"},
+                {"type":"put","K":spot-400,"premium":50,"pos":"long"}
+            ]
+
+        # Plot Strategy
+        plot_strategy(strategy_choice, strategy, spot, [spot-1000, spot+1000])
+
+        # Show Summary Table
+        st.markdown("### 📊 Strategy Summary")
+        summary = strategy_summary(strategy, spot, [spot-1000, spot+1000])
+        st.write(summary)
+        
     # Auto-refresh logic
     if st.session_state.auto_refresh:
         now = datetime.now()
@@ -1493,6 +1551,7 @@ def calculate_max_drawdown(prices):
     peak = prices.expanding(min_periods=1).max()
     drawdown = (prices - peak) / peak
     return drawdown.min() * 100
+
 
 if __name__ == "__main__":
     main()
