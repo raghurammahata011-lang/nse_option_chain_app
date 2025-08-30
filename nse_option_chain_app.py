@@ -596,8 +596,12 @@ def generate_signals_time_series(df_analytics_history):
             pnl = (entry_price - last_price)
         trades.append({"entry_date": entry_date, "exit_date": date, "position": position, "entry": entry_price, "exit": last_price, "pnl": pnl})
     return trades
+##BackTest
+from datetime import timedelta
+import pandas as pd
+import numpy as np
+import yfinance as yf
 
-# Replace the existing backtest_underlying function with this improved version
 def backtest_underlying(symbol, analytics_series, start_date, end_date):
     """
     Run backtest using underlying OHLC via yfinance and analytics_series.
@@ -610,31 +614,40 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date):
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")  # Include end date
     
+    # Fetch historical OHLC data
     hist = yf.download(yf_symbol, start=start_str, end=end_str, progress=False)
     if hist.empty:
         return {"error": f"No data for {symbol}."}
     
+    # Keep only close price and fix index
     hist = hist[['Close']].rename(columns={'Close': 'close'}).copy()
-    hist['Date'] = hist.index.date
-    hist.index = pd.to_datetime(hist.index.date)
+    hist['Date'] = pd.to_datetime(hist.index.date)
+    hist.reset_index(drop=True, inplace=True)
     
-    # Prepare analytics series
+    # Prepare analytics_series
     analytics_series = analytics_series.copy()
-    analytics_series['Date'] = analytics_series.index.date
+    if 'direction' not in analytics_series.columns:
+        return {"error": "analytics_series must have 'direction' column."}
+    analytics_series = analytics_series[['direction']].copy()
+    analytics_series['Date'] = pd.to_datetime(analytics_series.index.date)
+    analytics_series.reset_index(drop=True, inplace=True)
     
     # Full business day range
-    full_dates = pd.date_range(start=start_date, end=end_date, freq='B').date
+    full_dates = pd.date_range(start=start_date, end=end_date, freq='B')
     df_full = pd.DataFrame({'Date': full_dates})
     
-    # Merge data
+    # Merge data safely
     df = pd.merge(df_full, hist, on='Date', how='left')
     df = pd.merge(df, analytics_series, on='Date', how='left')
+    
+    # Forward fill missing values
     df['close'] = df['close'].ffill()
     df['direction'] = df['direction'].ffill().fillna('Neutral')
+    
     df.set_index('Date', inplace=True)
     
     # Generate trades
-    trades = generate_signals_time_series(df)
+    trades = generate_signals_time_series(df)  # Make sure this function exists
     
     # Performance metrics
     pnl_list = [t['pnl'] for t in trades] if trades else []
@@ -659,6 +672,7 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date):
         "equity_curve": equity.tolist(),
         "df": df
     }
+
 
 # Add this function to create a professional equity curve plot
 def plot_equity_curve(equity_curve, trades, df, symbol, line_shape='linear'):
