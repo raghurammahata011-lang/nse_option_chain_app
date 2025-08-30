@@ -891,10 +891,10 @@ def run_streamlit_app():
         # Prepare analytics series for backtest
         date_index = pd.date_range(start=start_date, end=end_date, freq='B')
         analytics_series = pd.DataFrame(index=date_index)
-        analytics_series['direction'] = analytics['direction']
-        analytics_series = analytics_series.reset_index()  # Convert index to column
+        analytics_series['direction'] = analytics['direction']  # single value
+        analytics_series['direction'] = analytics_series['direction'].ffill()  # ensure all rows have value
+        analytics_series = analytics_series.reset_index()
         analytics_series.columns = ['Date', 'direction']
-        analytics_series['Date'] = pd.to_datetime(analytics_series['Date']).dt.date
         
         try:
             bt = backtest_underlying(
