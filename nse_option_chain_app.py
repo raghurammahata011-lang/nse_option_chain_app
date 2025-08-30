@@ -615,21 +615,22 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date):
     
     # Convert dates to string format for yfinance
     start_str = start_date.strftime("%Y-%m-%d")
-    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")  # Include end date
+    end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
     
     hist = yf.download(yf_symbol, start=start_str, end=end_str, progress=False)
     if hist.empty:
         return {"error": f"No data for {symbol}."}
     
-    # Reset index to handle MultiIndex if present
-    hist = hist.reset_index()
-    hist = hist[['Date', 'Close']].rename(columns={'Close': 'close'})
+    # Prepare historical data - handle MultiIndex if present
+    hist = hist[['Close']].rename(columns={'Close': 'close'})
+    hist = hist.reset_index()  # Convert index to column
     hist['Date'] = pd.to_datetime(hist['Date']).dt.date
     
     # Prepare analytics series
     analytics_series = analytics_series.copy()
-    analytics_series['Date'] = pd.to_datetime(analytics_series.index).date
-    analytics_series = analytics_series[['Date', 'direction']]
+    analytics_series = analytics_series.reset_index()  # Convert index to column
+    analytics_series.columns = ['Date', 'direction']
+    analytics_series['Date'] = pd.to_datetime(analytics_series['Date']).dt.date
     
     # Full business day range
     full_dates = pd.date_range(start=start_date, end=end_date, freq='B').date
@@ -896,7 +897,10 @@ def run_streamlit_app():
         date_index = pd.date_range(start=start_date, end=end_date, freq='B')
         analytics_series = pd.DataFrame(index=date_index)
         analytics_series['direction'] = analytics['direction']
-        analytics_series.index = pd.to_datetime(analytics_series.index)
+        analytics_series = analytics_series.reset_index()  # Convert index to column
+        analytics_series.columns = ['Date', 'direction']
+        analytics_series['Date'] = pd.to_datetime(analytics_series['Date']).dt.date
+        
 
         try:
             bt = backtest_underlying(
