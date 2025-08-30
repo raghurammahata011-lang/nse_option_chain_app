@@ -603,24 +603,13 @@ import yfinance as yf
 from datetime import timedelta
 import matplotlib.pyplot as plt
 
+# Replace the backtest_underlying function with this corrected version
 def backtest_underlying(symbol, analytics_series, start_date, end_date,
                         capital_per_trade=100000, stop_loss=None, target_profit=None,
                         plot_equity=False):
     """
     Backtest an underlying using OHLC from yfinance and analytics_series signals.
-    Optional stop-loss, target-profit, and position sizing per trade.
-
-    Parameters:
-    - symbol: str, e.g., 'NIFTY', 'BANKNIFTY', or any yfinance ticker
-    - analytics_series: DataFrame with 'direction' column ('Long', 'Short', 'Neutral')
-    - start_date, end_date: datetime objects
-    - capital_per_trade: float, amount allocated per trade
-    - stop_loss: float, max loss per trade (absolute in points)
-    - target_profit: float, max profit per trade (absolute in points)
-    - plot_equity: bool, whether to plot equity curve
-
-    Returns:
-    - dict with trades, metrics, equity curve, and df
+    Fixed to handle MultiIndex issues with yfinance data.
     """
     # --- Mapping for NSE indices ---
     idx_map = {"NIFTY": "^NSEI", "BANKNIFTY": "^NSEBANK", 
@@ -631,27 +620,26 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date,
     start_str = start_date.strftime("%Y-%m-%d")
     end_str = (end_date + timedelta(days=1)).strftime("%Y-%m-%d")
     hist = yf.download(yf_symbol, start=start_str, end=end_str, progress=False)
+    
     if hist.empty:
         return {"error": f"No data for {symbol}."}
 
     # --- Prepare OHLC DataFrame ---
-    hist = hist[['Close']].rename(columns={'Close': 'close'}).copy()
-    if isinstance(hist.index, pd.MultiIndex):
-        hist = hist.reset_index(level=list(range(hist.index.nlevels)))
-    hist['Date'] = pd.to_datetime(hist.index.date)
-    hist.reset_index(drop=True, inplace=True)
+    # Reset index to handle MultiIndex if present
+    hist = hist.reset_index()
+    hist = hist[['Date', 'Close']].rename(columns={'Close': 'close'})
+    hist['Date'] = pd.to_datetime(hist['Date']).dt.date
 
     # --- Prepare analytics series ---
     if 'direction' not in analytics_series.columns:
         return {"error": "analytics_series must have 'direction' column."}
-    analytics_series = analytics_series[['direction']].copy()
-    if isinstance(analytics_series.index, pd.MultiIndex):
-        analytics_series = analytics_series.reset_index(level=list(range(analytics_series.index.nlevels)))
-    analytics_series['Date'] = pd.to_datetime(analytics_series.index.date)
-    analytics_series.reset_index(drop=True, inplace=True)
+    
+    analytics_series = analytics_series.copy()
+    analytics_series['Date'] = pd.to_datetime(analytics_series.index).date
+    analytics_series = analytics_series[['Date', 'direction']]
 
     # --- Full business day range ---
-    full_dates = pd.date_range(start=start_date, end=end_date, freq='B')
+    full_dates = pd.date_range(start=start_date, end=end_date, freq='B').date
     df_full = pd.DataFrame({'Date': full_dates})
 
     # --- Merge safely ---
@@ -674,16 +662,16 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date,
         price = row['close']
 
         if position is None:
-            if signal == 'Long':
-                position = 'Long'
+            if signal == 'Bullish':
+                position = 'LONG'
                 entry_price = price
                 units = capital_per_trade / price
-            elif signal == 'Short':
-                position = 'Short'
+            elif signal == 'Bearish':
+                position = 'SHORT'
                 entry_price = price
                 units = capital_per_trade / price
 
-        elif position == 'Long':
+        elif position == 'LONG':
             pnl = (price - entry_price) * units
             exit_trade = False
 
@@ -692,25 +680,17 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date,
                 exit_trade = True
             if target_profit is not None and pnl >= target_profit:
                 exit_trade = True
-            if signal in ['Short', 'Neutral']:
+            if signal in ['Bearish', 'Neutral']:
                 exit_trade = True
 
             if exit_trade:
                 trades.append({'entry_date': date, 'exit_date': date,
-                               'position': 'Long', 'entry_price': entry_price,
-                               'exit_price': price, 'pnl': pnl})
-                if signal == 'Short':
-                    position = 'Short'
-                    entry_price = price
-                    units = capital_per_trade / price
-                elif signal == 'Neutral':
-                    position = None
-                    units = 0
-                else:
-                    position = None
-                    units = 0
+                               'position': 'LONG', 'entry': entry_price,
+                               'exit': price, 'pnl': pnl})
+                position = None
+                units = 0
 
-        elif position == 'Short':
+        elif position == 'SHORT':
             pnl = (entry_price - price) * units
             exit_trade = False
 
@@ -719,23 +699,15 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date,
                 exit_trade = True
             if target_profit is not None and pnl >= target_profit:
                 exit_trade = True
-            if signal in ['Long', 'Neutral']:
+            if signal in ['Bullish', 'Neutral']:
                 exit_trade = True
 
             if exit_trade:
                 trades.append({'entry_date': date, 'exit_date': date,
-                               'position': 'Short', 'entry_price': entry_price,
-                               'exit_price': price, 'pnl': pnl})
-                if signal == 'Long':
-                    position = 'Long'
-                    entry_price = price
-                    units = capital_per_trade / price
-                elif signal == 'Neutral':
-                    position = None
-                    units = 0
-                else:
-                    position = None
-                    units = 0
+                               'position': 'SHORT', 'entry': entry_price,
+                               'exit': price, 'pnl': pnl})
+                position = None
+                units = 0
 
     # --- Metrics ---
     pnl_list = [t['pnl'] for t in trades] if trades else []
@@ -750,17 +722,6 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date,
     drawdown = peak - equity
     max_dd = np.max(drawdown) if len(drawdown) > 0 else 0.0
 
-    if plot_equity and len(equity) > 0:
-        plt.figure(figsize=(10, 4))
-        plt.plot(equity, label='Equity Curve')
-        plt.fill_between(range(len(equity)), equity - drawdown, equity,
-                         color='red', alpha=0.2, label='Drawdown')
-        plt.title(f'Equity Curve for {symbol}')
-        plt.xlabel('Trade Number')
-        plt.ylabel('PnL')
-        plt.legend()
-        plt.show()
-
     return {
         "trades": trades,
         "total_pnl": round(total_pnl, 2),
@@ -770,7 +731,6 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date,
         "equity_curve": equity.tolist(),
         "df": df
     }
-
 
 
 
@@ -999,7 +959,7 @@ def run_streamlit_app():
         date_index = pd.date_range(start=start_date, end=end_date, freq='B')
         analytics_series = pd.DataFrame(index=date_index)
         analytics_series['direction'] = analytics['direction']
-        analytics_series.index.name = 'Date'
+        analytics_series.index = pd.to_datetime(analytics_series.index)
 
         try:
             bt = backtest_underlying(
