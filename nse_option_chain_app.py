@@ -288,15 +288,15 @@ def train_ml_models_classification(df):
     return {"RF": round(acc_rf, 3), "LR": round(acc_lr, 3)}, consensus
 
 # ---------------- CHARTS ----------------
-def create_oi_chart(df):
+def create_oi_chart(df, line_shape='linear'):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['CALL_OI'], mode='lines', name='Call OI'))
-    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['PUT_OI'], mode='lines', name='Put OI'))
+    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['CALL_OI'], mode='lines', name='Call OI', line=dict(shape=line_shape)))
+    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['PUT_OI'], mode='lines', name='Put OI', line=dict(shape=line_shape)))
     fig.update_layout(title="Open Interest Distribution", xaxis_title="Strike", yaxis_title="OI",
                       height=320, margin=dict(t=40, b=30, l=40, r=20))
     return fig
 
-def create_sentiment_chart(df):
+def create_sentiment_chart(df, line_shape='linear'):
     df_local = df.copy()
     df_local['SENT'] = df_local['CALL_OI'] - df_local['PUT_OI']
     fig = go.Figure([go.Bar(x=df_local['STRIKE'], y=df_local['SENT'])])
@@ -304,20 +304,20 @@ def create_sentiment_chart(df):
                       height=320, margin=dict(t=40, b=40))
     return fig
 
-def create_iv_comparison_chart(df):
+def create_iv_comparison_chart(df, line_shape='linear'):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['CALL_IV'], name='Call IV'))
-    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['PUT_IV'], name='Put IV'))
+    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['CALL_IV'], name='Call IV', line=dict(shape=line_shape)))
+    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['PUT_IV'], name='Put IV', line=dict(shape=line_shape)))
     fig.update_layout(title="Implied Volatility (Call vs Put)", xaxis_title="Strike", yaxis_title="IV",
                       height=320, margin=dict(t=40, b=40))
     return fig
 
-def create_ml_prediction_chart(df, analytics, top_calls, top_puts):
+def create_ml_prediction_chart(df, analytics, top_calls, top_puts, line_shape='linear'):
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['TOTAL_OI'], mode='lines+markers', name='Total OI'))
+    fig.add_trace(go.Scatter(x=df['STRIKE'], y=df['TOTAL_OI'], mode='lines+markers', name='Total OI', line=dict(shape=line_shape)))
     if 'ML_PREDICTED_STRIKE' in df.columns:
         fig.add_trace(go.Scatter(x=df['ML_PREDICTED_STRIKE'], y=df['TOTAL_OI'], mode='markers', name='ML Predicted', marker=dict(size=8)))
-    fig.add_vline(x=analytics['max_pain'] if 'max_pain' in analytics else analytics.get('max_pain', None), line_dash='dash', annotation_text='Max Pain')
+    fig.add_vline(x=analytics.get('max_pain', None), line_dash='dash', annotation_text='Max Pain')
     for s in top_calls:
         fig.add_vline(x=s, line_dash='dot', line_color='green')
     for s in top_puts:
@@ -325,17 +325,50 @@ def create_ml_prediction_chart(df, analytics, top_calls, top_puts):
     fig.update_layout(title="ML Predicted Strikes & OI", xaxis_title="Strike", yaxis_title="Total OI", height=360)
     return fig
 
+
 def create_model_performance_chart(ml_results):
     if not ml_results:
         return go.Figure()
+    
     models = list(ml_results.keys())
     mae = [ml_results[m]['mae'] for m in models]
     r2 = [ml_results[m]['r2'] for m in models]
+    
     fig = go.Figure()
-    fig.add_trace(go.Bar(x=models, y=mae, name='MAE'))
-    fig.add_trace(go.Line(x=models, y=r2, name='R2'))
-    fig.update_layout(title="Model Performance", height=320)
+    
+    # Bar for MAE
+    fig.add_trace(go.Bar(
+        x=models,
+        y=mae,
+        name='MAE',
+        marker_color='orange',
+        yaxis='y1'
+    ))
+    
+    # Line for R2
+    fig.add_trace(go.Scatter(
+        x=models,
+        y=r2,
+        name='R²',
+        mode='lines+markers',
+        line=dict(color='blue', width=2),
+        marker=dict(size=8),
+        yaxis='y2'
+    ))
+    
+    # Layout with dual y-axis
+    fig.update_layout(
+        title="Regression Model Performance",
+        xaxis_title="Model",
+        yaxis=dict(title="MAE", side='left', showgrid=False),
+        yaxis2=dict(title="R²", overlaying='y', side='right', showgrid=False),
+        height=350,
+        template="plotly_white",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1)
+    )
+    
     return fig
+
 
 # ---------------- EXCEL EXPORT ----------------
 def save_to_excel(df, analytics, symbol, ml_results, top_calls, top_puts):
@@ -428,7 +461,7 @@ def fetch_for_watchlist(symbol):
         return symbol, None
     analytics = calculate_analytics(df)
     return symbol, analytics
-
+@st.cache_data(ttl=300)
 def watchlist_snapshot(symbols):
     """
     Fetch analytics for all symbols in watchlist in parallel and return a snapshot DataFrame.
@@ -628,7 +661,7 @@ def backtest_underlying(symbol, analytics_series, start_date, end_date):
     }
 
 # Add this function to create a professional equity curve plot
-def plot_equity_curve(equity_curve, trades, df, symbol):
+def plot_equity_curve(equity_curve, trades, df, symbol, line_shape='linear'):
     """
     Create a professional equity curve plot with buy/sell markers
     """
